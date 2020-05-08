@@ -1,0 +1,97 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+The call to library(rsparkling) automatically registers the Sparkling Water extension. This needs to be called before the spark_connect method.
+```{r}
+library(sparklyr)
+library(rsparkling)
+sc <- spark_connect(master = "local", version = "2.4.5")
+```
+
+
+h2oConf will contain all the settings needed to the start and run the H2O-3 cluster on Spark
+
+```{r}
+h2oConf <- H2OConf()
+```
+
+The newly created instance of H2OConf contains SW defaults affected by property values specified in spark-defaults.conf
+To create H2OContext, call:
+
+```{r}
+hc <- H2OContext.getOrCreate(h2oConf)
+```
+
+
+As an example, let’s copy the mtcars dataset to to Spark so we can access it from H2O Sparkling Water:
+
+```{r}
+library(dplyr)
+mtcars_tbl <- copy_to(sc, mtcars, overwrite = TRUE)
+mtcars_tbl
+```
+
+
+The use case we’d like to enable is calling the H2O algorithms and feature transformers directly on Spark DataFrames that we’ve manipulated with dplyr. This is indeed supported by the Sparkling Water package. Here is how you convert a Spark DataFrame into an H2O Frame:
+
+```{r}
+mtcars_hf <- hc$asH2OFrame(mtcars_tbl)
+mtcars_hf
+```
+
+
+Load H2o and split the data into a train and test set using H2O.
+Ignore the instruction to use h2o.init() since we are using Spark and do not need a stand-alone h20 cluster
+
+```{r}
+library(h2o)
+splits <- h2o.splitFrame(mtcars_hf, ratios = 0.7, seed = 1)
+```
+
+Define the response, y, and set the list of predictor variables, x, with strings
+
+```{r}
+y <- "mpg"
+x <- setdiff(names(mtcars_hf), y)
+```
+
+Train an H2O GBM using the training split from the H2OFrame with x and y names
+
+```{r}
+fit <- h2o.gbm(x = x,
+               y = y,
+               training_frame = splits[[1]],
+               min_rows = 1,
+               seed = 1)
+print(fit)
+```
+
+Evaluate the performance of the H20 GBM by evaluating its performance on a test split from above
+
+```{r}
+perf <- h2o.performance(fit, newdata = splits[[2]])
+print(perf)
+```
+
+Call h2o.predict() to generate predictions in an H2OFrame with a single (or multiple) columns of predicted values. 
+For regression it will be a single colum. For binary classification it will be 3 columns and in multi-class prediction it will be C+1 columns where C is the number of classes.
+
+In this code we are resuing the validation set for predictions
+```{r}
+pred_hf <- h2o.predict(fit, newdata = splits[[2]])
+head(pred_hf)
+```
+
+You can convert an H2OFrame into a Spark DataFrame using the as_spark_dataframe function:
+
+```{r}
+pred_sdf <- hc$asSparkFrame(pred_hf)
+head(pred_sdf)
+```
+
